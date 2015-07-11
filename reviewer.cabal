@@ -37,6 +37,8 @@ executable reviewer
                      , http-client
                      , text
                      , bytestring
+                     , shelly
+                     , aeson
   -- hs-source-dirs:      
   default-language:    Haskell2010
   ghc-options: -Wall

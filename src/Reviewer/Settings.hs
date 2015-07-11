@@ -1,5 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
-module Reviewer.Settings(Settings(..),settingsPages,settingsDataDir,settingsBrowserBin,settingsBaseUrl,parseSettings) where
+module Reviewer.Settings(Settings(..),settingsPages,settingsDbFile,settingsBrowserBin,settingsBaseUrl,parseSettings) where
 
 import ClassyPrelude hiding(FilePath,(<>))
 import System.FilePath
@@ -8,7 +8,7 @@ import Control.Lens(makeLenses)
 
 data Settings = Settings {
     _settingsPages :: Int
-  , _settingsDataDir :: FilePath
+  , _settingsDbFile :: FilePath
   , _settingsBrowserBin :: FilePath
   , _settingsBaseUrl :: Text
   } deriving(Show,Eq,Read)
@@ -18,7 +18,7 @@ $(makeLenses ''Settings)
 parseSettings' :: Parser Settings
 parseSettings' = Settings
                 <$> option auto (long "pages" <> help "How many pages to load")
-                <*> strOption (long "data-dir" <> help "Directory for loading/storing data")
+                <*> strOption (long "db-file" <> help "Name of the data base")
                 <*> strOption (long "browser-bin" <> help "Location of the browser")
                 <*> option auto (long "base-url" <> help "Base URL to load")
 
