@@ -2,7 +2,6 @@ module Reviewer.PageContent(PageContent,pageContentAsText,pageContentAsStrictTex
 
 import ClassyPrelude
 import Control.Lens(Iso',iso)
-import qualified Data.Text as TS
 import qualified Data.Text.Lazy as TL
 
 newtype PageContent = PageContent Text deriving(Show,Eq)

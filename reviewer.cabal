@@ -51,6 +51,7 @@ executable reviewer
                      , haskeline
                      , async
                      , wreq
+                     , mtl
                      , http-client
                      , text
                      , bytestring

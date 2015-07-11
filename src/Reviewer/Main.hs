@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 module Main where
 
 import ClassyPrelude hiding(getCurrentTime,elem,writeFile,readFile,Element,FilePath)
@@ -5,9 +7,10 @@ import Data.Maybe(fromJust)
 import Text.Taggy.Lens(html,allNamed,allAttributed,Element,contents,attr)
 import Reviewer.PageContent
 import Reviewer.LinkRange
+import Control.Monad(foldM_)
 import Reviewer.PageNumber
 import Reviewer.Time
-import qualified Shelly as Shelly
+import qualified Shelly
 import Reviewer.EntityType
 import Reviewer.RelevantLink
 import Control.Concurrent.Async(mapConcurrently)
@@ -17,16 +20,15 @@ import Reviewer.Entity
 import qualified System.Console.Haskeline as HL
 import Reviewer.Url
 import Reviewer.Database
-import Control.Lens((^.),(&),(<>~),view,filtered,(.~),Getting,from,only,ix,to,(^..),(^?!))
-import Network.Wreq(get,responseBody)
+import Control.Lens((^.),(&),(<>~),view,filtered,(.~),Getting,from,only,ix,to,(^..),(^?!),has)
+import qualified Network.Wreq as Wreq
 import Data.Text.Lens(packed)
 
 outputStrLn :: MonadIO m => Text -> HL.InputT m ()
 outputStrLn s = HL.outputStrLn (unpack s)
 
 makePageUrl :: Settings -> PageNumber -> Url
---makePageUrl settings page = ((settings ^. settingsBaseUrl) <> "/forumdisplay.php?f=170&order=desc&page=" <> pack (show (extractPageNumber page))) ^. from urlAsText
-makePageUrl settings page = (pack (settings ^. settingsBaseUrl) <> "/forumdisplay.php?f=169&order=desc&page=" <> pack (show (extractPageNumber page))) ^. from urlAsText
+makePageUrl settings page = (pack (settings ^. settingsBaseUrl) <> "/forumdisplay.php?f=" <> pack (settings ^. settingsSubForum) <> "&order=desc&page=" <> pack (show (extractPageNumber page))) ^. from urlAsText
 
 retrieveUrl :: MonadIO m => Url -> m PageContent
 retrieveUrl u = do
@@ -34,8 +36,9 @@ retrieveUrl u = do
   let opts = defaults & manager .~ Left (defaultManagerSettings { managerResponseTimeout = Just 10000 } )
   in undefined
   -}
-  response <- liftIO (get (u ^. urlAsString))
-  return ((decodeUtf8 (toStrict (response ^. responseBody))) ^. from pageContentAsText)
+  putStrLn $ "retrieving " <> pack (show u)
+  response <- liftIO (Wreq.get (u ^. urlAsString))
+  return $ decodeUtf8 (toStrict (response ^. Wreq.responseBody)) ^. from pageContentAsText
 
 extractLinks :: PageContent -> [RelevantLink]
 extractLinks page = page ^.. pageContentAsStrictText . html . allNamed (only "a") . allAttributed (ix "id" . filtered ("thread_title" `isPrefixOf`)) . to relevantLink
@@ -84,8 +87,8 @@ splitOnSafe a b = unsafeToMinLen (splitOn a b)
 longestName :: Text -> Text
 longestName = maximumBy (compare `on` length) . splitOnSafe " / "
 
-processLink :: (MonadIO m,HL.MonadException m) => Settings -> LinkRange -> RelevantLink -> HL.InputT m ()
-processLink settings linkRange link = do
+processLink :: forall m.(MonadIO m,HL.MonadException m) => Settings -> [Entity] -> LinkRange -> RelevantLink -> HL.InputT m [Entity]
+processLink settings previousEntities linkRange link = do
   db <- readDatabase (settings ^. settingsDbFile)
   currentTime <- getCurrentTime
   outputStrLn (visualizeLinkRange linkRange)
@@ -95,38 +98,49 @@ processLink settings linkRange link = do
       openBrowser settings (link ^. rlUrl)
       c' <- readCharConditional "(g)ood | (b)ad | (i)ndet: " readEntityState
       case c' of
-        Nothing -> return ()
+        Nothing -> return previousEntities
         Just c -> do
           let lonName = longestName (link ^. rlText)
           name <- HL.getInputLine (unpack ("Which name? ["<> lonName <>"] "))
           case name of
-            Nothing -> return ()
+            Nothing -> return previousEntities
             Just newName -> do
-              writeDatabase (settings ^. settingsDbFile) ((Entity{_entityType = c,_entityText = if null newName then lonName else pack newName,_entityEncounters = [currentTime]}):db)
-              outputStrLn $ "Updated database!"
-    Just entity -> do
-      let
-        editedEnt = entity & entityEncounters <>~ [currentTime]
-      outputStrLn $ "Previous encounters:"
-      mapM_ (outputStrLn . pack .show) (entity ^. entityEncounters)
-      outputStrLn ""
-      case entity ^. entityType of
-        EntityBad -> do
-          outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is bad, ignoring"
-          writeDatabase (settings ^. settingsDbFile) (updateDatabase db editedEnt)
-        EntityGood -> do
-          outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is good, opening"
-          writeDatabase (settings ^. settingsDbFile) (updateDatabase db editedEnt)
-          openBrowser settings (link ^. rlUrl)
-        EntityIndet -> do
-          outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is indeterminate, opening"
-          openBrowser settings (link ^. rlUrl)
-          c' <- readCharConditional "(g)ood | (b)ad | (i)ndet: " readEntityState
-          case c' of
-            Nothing -> return ()
-            Just c -> do
-              writeDatabase (settings ^. settingsDbFile) (updateDatabase db (editedEnt & entityType .~ c))
-              outputStrLn $ "Updated data base!"
+              let newEntity = Entity{_entityType = c,_entityText = if null newName then lonName else pack newName,_entityEncounters = [currentTime]}
+              writeDatabase (settings ^. settingsDbFile) (newEntity:db)
+              outputStrLn "Updated database!"
+              return (newEntity : previousEntities)
+    Just entity ->
+      if has (traverse . entityText . only (entity ^. entityText)) previousEntities
+        then do
+          outputStrLn "Entity already encountered, ignoring"
+          return previousEntities
+        else do
+          let
+              editedEnt = entity & entityEncounters <>~ [currentTime]
+          outputStrLn "Previous encounters:"
+          mapM_ (outputStrLn . pack .show) (entity ^. entityEncounters)
+          outputStrLn ""
+          case entity ^. entityType of
+              EntityBad -> do
+                outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is bad, ignoring"
+                writeDatabase (settings ^. settingsDbFile) (updateDatabase db editedEnt)
+                return (entity : previousEntities)
+              EntityGood -> do
+                outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is good, opening"
+                writeDatabase (settings ^. settingsDbFile) (updateDatabase db editedEnt)
+                openBrowser settings (link ^. rlUrl)
+                return (entity : previousEntities)
+              EntityIndet -> do
+                outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is indeterminate, opening"
+                openBrowser settings (link ^. rlUrl)
+                c' <- readCharConditional "(g)ood | (b)ad | (i)ndet: " readEntityState
+                case c' of
+                    Nothing ->
+                      return (entity : previousEntities)
+                    Just c -> do
+                      writeDatabase (settings ^. settingsDbFile) (updateDatabase db (editedEnt & entityType .~ c))
+                      outputStrLn "Updated data base!"
+                      return (entity : previousEntities)
 
 main :: IO ()
 main = do
@@ -145,6 +159,7 @@ main = do
   pageContents <- mapConcurrently retrieveUrl pageUrls
   let
     relevantLinks = concatMap extractLinks pageContents
-  HL.runInputT HL.defaultSettings (mapM_ (\(i,l) -> processLink settings (LinkRange i (length relevantLinks)) l) (zip [1..] relevantLinks))
+  HL.runInputT HL.defaultSettings $
+    foldM_ (\previousEntities (i,l) -> processLink settings previousEntities (LinkRange i (length relevantLinks)) l) [] (zip [1..] relevantLinks)
   
   
