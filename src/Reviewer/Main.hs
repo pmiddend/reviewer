@@ -1,38 +1,32 @@
 module Main where
 
-import ClassyPrelude hiding(getCurrentTime,elem,writeFile,readFile,Element)
+import ClassyPrelude hiding(getCurrentTime,elem,writeFile,readFile,Element,FilePath)
 import Data.Maybe(fromJust)
-import Text.Taggy.Lens(html,allNamed,allAttributed,content,attrs,element,Element,contents,attr)
+import Text.Taggy.Lens(html,allNamed,allAttributed,Element,contents,attr)
 import Reviewer.PageContent
-import System.Directory(doesFileExist)
+import Reviewer.LinkRange
 import Reviewer.PageNumber
 import Reviewer.Time
 import qualified Shelly as Shelly
 import Reviewer.EntityType
 import Reviewer.RelevantLink
 import Control.Concurrent.Async(mapConcurrently)
-import qualified Data.Text.IO as TIO
 import Data.Text(splitOn)
-import Data.Text.Lazy.Builder(toLazyText)
-import Data.Aeson(toJSON,encode,decode)
-import Data.Aeson.Types(defaultOptions)
-import Data.Aeson.Encode(encodeToTextBuilder)
 import Reviewer.Settings
 import Reviewer.Entity
 import qualified System.Console.Haskeline as HL
 import Reviewer.Url
 import Reviewer.Database
-import Control.Lens((^.),(&),(<>~),view,filtered,(.~),Getting,from,only,ix,at,to,(^..),(^?!),folded)
+import Control.Lens((^.),(&),(<>~),view,filtered,(.~),Getting,from,only,ix,to,(^..),(^?!))
 import Network.Wreq(get,responseBody)
 import Data.Text.Lens(packed)
-import Data.ByteString.Lazy(writeFile,readFile)
 
 outputStrLn :: MonadIO m => Text -> HL.InputT m ()
 outputStrLn s = HL.outputStrLn (unpack s)
 
 makePageUrl :: Settings -> PageNumber -> Url
 --makePageUrl settings page = ((settings ^. settingsBaseUrl) <> "/forumdisplay.php?f=170&order=desc&page=" <> pack (show (extractPageNumber page))) ^. from urlAsText
-makePageUrl settings page = (pack (settings ^. settingsBaseUrl) <> "/forumdisplay.php?f=170&order=desc&page=" <> pack (show (extractPageNumber page))) ^. from urlAsText
+makePageUrl settings page = (pack (settings ^. settingsBaseUrl) <> "/forumdisplay.php?f=169&order=desc&page=" <> pack (show (extractPageNumber page))) ^. from urlAsText
 
 retrieveUrl :: MonadIO m => Url -> m PageContent
 retrieveUrl u = do
@@ -53,21 +47,6 @@ extractLinks page = page ^.. pageContentAsStrictText . html . allNamed (only "a"
 
 classifyLink :: Database -> RelevantLink -> Maybe Entity
 classifyLink db link = find (\entity -> (entity ^. entityText) `isInfixOf` (link ^. rlText)) db
-
-readDatabase :: MonadIO m => Settings -> m Database
-readDatabase settings = do
-  exists <- liftIO (doesFileExist (settings ^. settingsDbFile))
-  if not exists
-    then return []
-    else do 
-      fileContent <- liftIO (readFile (settings ^. settingsDbFile))
-      case decode fileContent of
-        Nothing -> error "Invalid data base"
-        Just s -> return s
-
-writeDatabase :: MonadIO m => Settings -> Database -> m ()
-writeDatabase settings db = do
-  liftIO (writeFile (settings ^. settingsDbFile) (encode (toJSON db)))
 
 eqL :: Eq a => Getting a t a -> t -> t -> Bool
 eqL l a b = view l a == view l b
@@ -105,10 +84,11 @@ splitOnSafe a b = unsafeToMinLen (splitOn a b)
 longestName :: Text -> Text
 longestName = maximumBy (compare `on` length) . splitOnSafe " / "
 
-processLink :: (MonadIO m,HL.MonadException m) => Settings -> RelevantLink -> HL.InputT m ()
-processLink settings link = do
-  db <- readDatabase settings
+processLink :: (MonadIO m,HL.MonadException m) => Settings -> LinkRange -> RelevantLink -> HL.InputT m ()
+processLink settings linkRange link = do
+  db <- readDatabase (settings ^. settingsDbFile)
   currentTime <- getCurrentTime
+  outputStrLn (visualizeLinkRange linkRange)
   case classifyLink db link of
     Nothing -> do
       outputStrLn $ "Entity \"" <> link ^. rlText <> "\" is unknown, opening"
@@ -122,7 +102,7 @@ processLink settings link = do
           case name of
             Nothing -> return ()
             Just newName -> do
-              writeDatabase settings ((Entity{_entityType = c,_entityText = if null newName then lonName else pack newName,_entityEncounters = [currentTime]}):db)
+              writeDatabase (settings ^. settingsDbFile) ((Entity{_entityType = c,_entityText = if null newName then lonName else pack newName,_entityEncounters = [currentTime]}):db)
               outputStrLn $ "Updated database!"
     Just entity -> do
       let
@@ -133,10 +113,10 @@ processLink settings link = do
       case entity ^. entityType of
         EntityBad -> do
           outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is bad, ignoring"
-          writeDatabase settings (updateDatabase db editedEnt)
+          writeDatabase (settings ^. settingsDbFile) (updateDatabase db editedEnt)
         EntityGood -> do
           outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is good, opening"
-          writeDatabase settings (updateDatabase db editedEnt)
+          writeDatabase (settings ^. settingsDbFile) (updateDatabase db editedEnt)
           openBrowser settings (link ^. rlUrl)
         EntityIndet -> do
           outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is indeterminate, opening"
@@ -145,7 +125,7 @@ processLink settings link = do
           case c' of
             Nothing -> return ()
             Just c -> do
-              writeDatabase settings (updateDatabase db (editedEnt & entityType .~ c))
+              writeDatabase (settings ^. settingsDbFile) (updateDatabase db (editedEnt & entityType .~ c))
               outputStrLn $ "Updated data base!"
 
 main :: IO ()
@@ -165,6 +145,6 @@ main = do
   pageContents <- mapConcurrently retrieveUrl pageUrls
   let
     relevantLinks = concatMap extractLinks pageContents
-  HL.runInputT HL.defaultSettings (mapM_ (processLink settings) relevantLinks)
+  HL.runInputT HL.defaultSettings (mapM_ (\(i,l) -> processLink settings (LinkRange i (length relevantLinks)) l) (zip [1..] relevantLinks))
   
   
