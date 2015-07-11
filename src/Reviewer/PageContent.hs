@@ -1,11 +1,14 @@
-module Reviewer.PageContent(pageContentFromText,pageContentToText,PageContent) where
+module Reviewer.PageContent(PageContent,pageContentAsText,pageContentAsStrictText) where
 
 import ClassyPrelude
+import Control.Lens(Iso',iso)
+import qualified Data.Text as TS
+import qualified Data.Text.Lazy as TL
 
-newtype PageContent = PageContent Text
+newtype PageContent = PageContent Text deriving(Show,Eq)
 
-pageContentFromText :: Text -> PageContent
-pageContentFromText = PageContent
+pageContentAsText :: Iso' PageContent Text
+pageContentAsText = iso (\(PageContent c) -> c) PageContent
 
-pageContentToText :: PageContent -> Text
-pageContentToText (PageContent x) = x
+pageContentAsStrictText :: Iso' PageContent TL.Text
+pageContentAsStrictText = iso (\(PageContent c) -> TL.fromStrict c) (PageContent . TL.toStrict)
