@@ -1,28 +1,32 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes       #-}
 module Main where
 
-import ClassyPrelude hiding(getCurrentTime,elem,writeFile,readFile,Element,FilePath)
-import Data.Maybe(fromJust)
-import Text.Taggy.Lens(html,allNamed,allAttributed,Element,contents,attr)
-import Reviewer.PageContent
-import Reviewer.LinkRange
-import Control.Monad(foldM_)
-import Reviewer.PageNumber
-import Reviewer.Time
+import           ClassyPrelude            hiding (Element, FilePath, elem,
+                                           getCurrentTime, readFile, writeFile)
+import           Control.Concurrent.Async (mapConcurrently)
+import           Control.Lens             (Getting, filtered, from, has, ix,
+                                           only, to, view, (&), (.~), (<>~),
+                                           (^.), (^..), (^?!))
+import           Control.Monad            (foldM_)
+import           Data.Maybe               (fromJust)
+import           Data.Text                (splitOn)
+import           Data.Text.Lens           (packed)
+import qualified Network.Wreq             as Wreq
+import           Reviewer.Database
+import           Reviewer.Entity
+import           Reviewer.EntityType
+import           Reviewer.LinkRange
+import           Reviewer.PageContent
+import           Reviewer.PageNumber
+import           Reviewer.RelevantLink
+import           Reviewer.Settings
+import           Reviewer.Time
+import           Reviewer.Url
 import qualified Shelly
-import Reviewer.EntityType
-import Reviewer.RelevantLink
-import Control.Concurrent.Async(mapConcurrently)
-import Data.Text(splitOn)
-import Reviewer.Settings
-import Reviewer.Entity
 import qualified System.Console.Haskeline as HL
-import Reviewer.Url
-import Reviewer.Database
-import Control.Lens((^.),(&),(<>~),view,filtered,(.~),Getting,from,only,ix,to,(^..),(^?!),has)
-import qualified Network.Wreq as Wreq
-import Data.Text.Lens(packed)
+import           Text.Taggy.Lens          (Element, allAttributed, allNamed,
+                                           attr, contents, html)
 
 outputStrLn :: MonadIO m => Text -> HL.InputT m ()
 outputStrLn s = HL.outputStrLn (unpack s)
@@ -123,6 +127,7 @@ processLink settings previousEntities linkRange link = do
           case entity ^. entityType of
               EntityBad -> do
                 outputStrLn $ "Entity \"" <> entity ^. entityText <> "\" is bad, ignoring"
+                outputStrLn $ "Original link: " <> link ^. rlText
                 writeDatabase (settings ^. settingsDbFile) (updateDatabase db editedEnt)
                 return (entity : previousEntities)
               EntityGood -> do
@@ -161,5 +166,5 @@ main = do
     relevantLinks = concatMap extractLinks pageContents
   HL.runInputT HL.defaultSettings $
     foldM_ (\previousEntities (i,l) -> processLink settings previousEntities (LinkRange i (length relevantLinks)) l) [] (zip [1..] relevantLinks)
-  
-  
+
+
