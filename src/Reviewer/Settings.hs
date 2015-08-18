@@ -1,5 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
-module Reviewer.Settings(Settings(..),settingsPages,settingsDbFile,settingsSubForum,settingsBrowserBin,settingsBaseUrl,parseSettings) where
+module Reviewer.Settings(Settings(..),settingsPages,settingsDbFile,settingsSubForum,settingsBrowserBin,settingsBaseUrl,parseSettings,settingsDdosPrefix) where
 
 import ClassyPrelude hiding(FilePath,(<>))
 import System.FilePath
@@ -9,6 +9,7 @@ import Control.Lens(makeLenses)
 data Settings = Settings {
     _settingsPages :: Int
   , _settingsDbFile :: FilePath
+  , _settingsDdosPrefix :: String
   , _settingsSubForum :: String
   , _settingsBrowserBin :: FilePath
   , _settingsBaseUrl :: String
@@ -20,6 +21,7 @@ parseSettings' :: Parser Settings
 parseSettings' = Settings
                 <$> option auto (long "pages" <> help "How many pages to load")
                 <*> strOption (long "db-file" <> help "Name of the data base")
+                <*> strOption (long "ddos-prefix" <> help "DDOS prefix")
                 <*> strOption (long "subforum" <> help "Sub-forum (170 low, 169 high)")
                 <*> strOption (long "browser-bin" <> help "Location of the browser")
                 {-<*> option auto (long "base-url" <> help "Base URL to load")-}

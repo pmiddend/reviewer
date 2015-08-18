@@ -48,6 +48,7 @@ executable reviewer
                      , optparse-applicative
                      , lens
                      , time
+                     , case-insensitive
                      , haskeline
                      , async
                      , wreq

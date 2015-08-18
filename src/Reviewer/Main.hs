@@ -10,9 +10,10 @@ import           Control.Lens             (Getting, filtered, from, has, ix,
                                            (^.), (^..), (^?!))
 import           Control.Monad            (foldM_)
 import           Data.Maybe               (fromJust)
-import           Data.Text                (splitOn)
+import           Data.Text                (splitOn,breakOn)
 import           Data.Text.Lens           (packed)
 import qualified Network.Wreq             as Wreq
+import qualified Data.CaseInsensitive as CI
 import           Reviewer.Database
 import           Reviewer.Entity
 import           Reviewer.EntityType
@@ -22,6 +23,7 @@ import           Reviewer.PageNumber
 import           Reviewer.RelevantLink
 import           Reviewer.Settings
 import           Reviewer.Time
+import           Reviewer.DdosPrefix
 import           Reviewer.Url
 import qualified Shelly
 import qualified System.Console.Haskeline as HL
@@ -34,14 +36,14 @@ outputStrLn s = HL.outputStrLn (unpack s)
 makePageUrl :: Settings -> PageNumber -> Url
 makePageUrl settings page = (pack (settings ^. settingsBaseUrl) <> "/forumdisplay.php?f=" <> pack (settings ^. settingsSubForum) <> "&order=desc&page=" <> pack (show (extractPageNumber page))) ^. from urlAsText
 
-retrieveUrl :: MonadIO m => Url -> m PageContent
-retrieveUrl u = do
+retrieveUrl :: MonadIO m => DdosPrefix -> Url -> m PageContent
+retrieveUrl t u = do
   {-
   let opts = defaults & manager .~ Left (defaultManagerSettings { managerResponseTimeout = Just 10000 } )
   in undefined
   -}
   putStrLn $ "retrieving " <> pack (show u)
-  response <- liftIO (Wreq.get (u ^. urlAsString))
+  response <- liftIO (Wreq.getWith (Wreq.defaults & Wreq.headers <>~ [(CI.mk "Cookie",encodeUtf8 (t ^. ddosName <> "=" <> t ^. ddosValue))]) (u ^. urlAsString))
   return $ decodeUtf8 (toStrict (response ^. Wreq.responseBody)) ^. from pageContentAsText
 
 extractLinks :: PageContent -> [RelevantLink]
@@ -147,6 +149,26 @@ processLink settings previousEntities linkRange link = do
                       outputStrLn "Updated data base!"
                       return (entity : previousEntities)
 
+extractBetween :: Text -> Text -> Text -> Text
+extractBetween prefix suffix text =
+  let
+    (_,prefixAndAfter) = breakOn prefix text
+    (match,_) = breakOn suffix prefixAndAfter
+  in
+   match
+
+extractDdosPrefix :: Settings -> IO (Maybe DdosPrefix)
+extractDdosPrefix settings = do
+  getResult <- Wreq.get (settings ^. settingsBaseUrl)
+  let
+    resultText = getResult ^. Wreq.responseBody . to (decodeUtf8 . toStrict)
+    between = extractBetween (settings ^. settingsDdosPrefix . packed <> "=") ";" resultText
+    (before,equalsAndAfter) = breakOn "=" between
+  return (if null between then Nothing else Just (DdosPrefix before (drop 1 equalsAndAfter)))
+
+maybeFlipped :: Maybe a -> b -> (a -> b) -> b
+maybeFlipped m d f = maybe d f m
+
 main :: IO ()
 main = do
   --videosPage <- TIO.readFile "/tmp/videos.html"
@@ -158,13 +180,16 @@ main = do
   --db <-readDatabase settings
   --putStrLn . toStrict . toLazyText . encodeToTextBuilder $ (toJSON db)
   settings <- parseSettings
-  let
-    pages = [1..settings ^. settingsPages]
-    pageUrls = (makePageUrl settings . pageNumber) <$> pages
-  pageContents <- mapConcurrently retrieveUrl pageUrls
-  let
-    relevantLinks = concatMap extractLinks pageContents
-  HL.runInputT HL.defaultSettings $
-    foldM_ (\previousEntities (i,l) -> processLink settings previousEntities (LinkRange i (length relevantLinks)) l) [] (zip [1..] relevantLinks)
+  putStrLn "Extracting prefix..."
+  ddosPrefix' <- extractDdosPrefix settings
+  maybeFlipped ddosPrefix' (putStrLn "Prefix not found, please check") $ \ddosPrefix -> do
+    let
+      pages = [1..settings ^. settingsPages]
+      pageUrls = (makePageUrl settings . pageNumber) <$> pages
+    pageContents <- mapConcurrently (retrieveUrl ddosPrefix) pageUrls
+    let
+      relevantLinks = concatMap extractLinks pageContents
+    HL.runInputT HL.defaultSettings $
+        foldM_ (\previousEntities (i,l) -> processLink settings previousEntities (LinkRange i (length relevantLinks)) l) [] (zip [1..] relevantLinks)
 
 
